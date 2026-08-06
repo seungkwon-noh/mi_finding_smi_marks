@@ -1,0 +1,26 @@
+version: 1.0
+provider:
+  name: openfaas
+  gateway: http://127.0.0.1:8080
+
+functions:
+  mi-finding-smi-marks:
+    lang: python3-flask-debian
+    handler: ./mi_finding_smi_marks
+    image: mi-finding-smi-marks:latest
+    annotations:
+      com.openfaas.scale.min: "1"
+      com.openfaas.scale.max: "3"
+    environment:
+      exec_timeout: 5m
+      read_timeout: 5m30s
+      write_timeout: 5m30s
+      MINIO_BUCKET: static
+      MINIO_TEMPLATE_PREFIX: MI/GA_TEMPLATE/
+      MINIO_SECURE: "false"
+      MI_MAX_TEMPLATES: "100"
+      MI_INCLUDE_DETAILS: "false"
+    secrets:
+      - mi-minio-access-key
+      - mi-minio-secret-key
+

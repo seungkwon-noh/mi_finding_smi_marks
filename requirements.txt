@@ -1,3 +1,4 @@
-numpy>=1.26
-opencv-python-headless>=4.9
+-r mi_finding_smi_marks/requirements.txt
+pytest>=8,<9
+ruff>=0.16,<1
 

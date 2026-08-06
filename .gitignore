@@ -7,6 +7,8 @@ htmlcov/
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 .DS_Store
 .idea/
 .vscode/
@@ -15,4 +17,3 @@ dist/
 *.egg-info/
 result*.json
 annotated*.png
-

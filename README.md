@@ -1,144 +1,183 @@
-# mi_finding
+# mi-finding-smi-marks
 
-OpenCV 템플릿 매칭으로 화면 속 대상의 중심 좌표를 찾는 프로젝트입니다.  
-ChatGPT의 `mi_finding_smi_marks` 대화에서 정리한 판정 흐름을 실행 가능한 패키지로 구성했습니다.
+SMI Review/Popup 화면에서 템플릿의 중심 좌표를 찾아 반환하는 OpenFaaS
+함수입니다. 기존 ChatGPT 대화에 있던 실제 운영 구조에 맞춰
+`handler.py`가 요청 처리 전체를 담당하고, 템플릿 매칭 함수는
+`util_functions.py`에 모았습니다.
 
-## 판정 로직
+## 실행 구조
+
+```text
+Scala 호출 프로그램
+  -> OpenFaaS Gateway: /function/mi-finding-smi-marks
+  -> Provider / Kubernetes Service
+  -> 함수 Pod의 fwatchdog
+  -> /home/app/index.py (Flask :5000)
+  -> /home/app/function/handler.py의 handle(req)
+  -> MinIO 템플릿 조회 및 OpenCV 매칭
+  -> Flask JSON Response
+```
+
+함수 Pod는 최소 replica 1개로 유지됩니다. 요청이 오면 OpenFaaS Python
+템플릿의 `index.py`가 원문 요청 body를 `handler.handle(req)`에 넘기고,
+반환된 Flask Response가 같은 경로를 역순으로 호출자에게 전달됩니다.
+
+## 저장소 구조
+
+```text
+mi-finding-smi-marks.yml       OpenFaaS build/deploy 설정
+mi_finding_smi_marks/
+  __init__.py
+  handler.py                   FaaS 진입점, MinIO 조회, Review/Popup 분기
+  util_functions.py            전처리, 지표, Full/Partial 템플릿 매칭
+  riselog.py                   stdout JSON 로그 호환 함수
+  requirements.txt             함수 이미지에 설치할 Python 패키지
+tests/                         FaaS 응답 계약과 매칭 로직 테스트
+```
+
+OpenFaaS 언어 템플릿이 생성하는 `index.py`와 `fwatchdog`은 이 저장소에
+직접 넣지 않습니다. 빌드할 때 `python3-flask-debian` 템플릿이 제공하며,
+함수 폴더는 컨테이너의 `/home/app/function`으로 복사됩니다.
+
+## 요청과 응답
+
+Review 호출은 `mode`에 `review` 또는 일반 문자열을 사용합니다.
+
+```json
+{
+  "image": "BASE64_PNG_OR_JPEG",
+  "product": "PART_ID",
+  "layer": "STEP_SEQ",
+  "eqpid": "EQP_ID",
+  "mode": "review"
+}
+```
+
+성공:
+
+```json
+{"success": true, "message": "340,271"}
+```
+
+실패는 비즈니스 결과이므로 HTTP 200과 `-1,-1`을 반환합니다.
+
+```json
+{"success": false, "message": "-1,-1"}
+```
+
+잘못된 JSON이나 필수 필드 누락은 HTTP 400, MinIO 같은 내부 오류는 HTTP
+500입니다.
+
+Popup 호출은 다음처럼 보냅니다.
+
+```json
+{
+  "image": "BASE64_PNG_OR_JPEG",
+  "eqpid": "EQP_ID",
+  "mode": "popup"
+}
+```
+
+`popup_on_target`, `popup_next_site` 순서로 각각 찾고, 한쪽만 발견되면 다른
+좌표만 `-1,-1`로 유지합니다.
+
+```json
+{"success": true, "message": "(120,80), (-1,-1)"}
+```
+
+## 템플릿과 판정 규칙
+
+템플릿은 MinIO의 기본 bucket/prefix 아래에서 읽습니다.
+
+```text
+static/MI/GA_TEMPLATE/{product}_{layer}...
+static/MI/GA_TEMPLATE/popup_on_target...
+static/MI/GA_TEMPLATE/popup_next_site...
+```
+
+대상 제품·layer 템플릿이 없을 때 전체 템플릿을 검색하지 않습니다. 이
+fallback은 다른 제품의 유사한 UI가 선택되는 오탐을 만들 수 있기 때문입니다.
 
 ```text
 Full score >= 0.70
-  -> 바로 PASS
+  -> 보조 지표와 무관하게 바로 PASS
 
 0.60 <= Full score < 0.70
-  -> variance ratio, SSIM, histogram, NMI 보조 조건 통과 시 PASS
+  -> variance ratio, SSIM, histogram, NMI 조건 통과 시 PASS
 
-Full score < 0.60 또는 보조 조건 실패
-  -> 0.70, 0.35 비율의 edge partial template으로 재검색
+Full 실패
+  -> 원본 템플릿의 상/하/좌/우 0.70 edge로 재검색
+  -> 실패하면 0.35 edge로 재검색
 
 Partial score >= 0.70 + partial 보조 조건 통과
   -> PASS
 
 그 외
-  -> FAIL
+  -> FAIL; 마지막 partial 최고점을 임의로 반환하지 않음
 ```
 
-색상 히스토그램 상관도에는 `abs()`를 사용하지 않습니다. 음의 상관도를 양의 유사도로 잘못 해석하지 않기 위해서입니다. Partial 매칭은 잘라낸 edge의 offset을 원래 템플릿 좌표로 환산하므로, 반환 중심점은 원본 템플릿 전체의 중심입니다.
+Partial에서 잘라낸 edge의 offset을 원본 템플릿 좌표로 복원하므로 반환 좌표는
+항상 원본 템플릿 전체의 중심입니다. Histogram correlation에는 `abs()`를
+사용하지 않습니다. 음의 상관도를 높은 유사도로 오인하지 않기 위해서입니다.
 
-## 설치
+## MinIO 설정
 
-Python 3.10 이상이 필요합니다.
+접속 주소와 인증정보는 코드에 넣지 않습니다.
+
+- `MINIO_ENDPOINT`: 필수, 예: `minio.internal:9000`
+- `MINIO_ACCESS_KEY`: 환경변수 또는 OpenFaaS Secret
+- `MINIO_SECRET_KEY`: 환경변수 또는 OpenFaaS Secret
+- `MINIO_SECURE`: 기본 `false`
+- `MINIO_BUCKET`: 기본 `static`
+- `MINIO_TEMPLATE_PREFIX`: 기본 `MI/GA_TEMPLATE/`
+
+배포 YAML은 아래 Secret 이름을 마운트합니다.
+
+```text
+mi-minio-access-key
+mi-minio-secret-key
+```
+
+함수는 환경변수를 먼저 사용하고, 없으면 `/var/openfaas/secrets/`의 파일을
+읽습니다. 실제 MinIO 값은 서버의 OpenFaaS/Kubernetes 설정으로 주입하세요.
+
+## 빌드와 배포
+
+먼저 `mi-finding-smi-marks.yml`의 `image`를 사내 registry 주소로 바꿉니다.
+
+```yaml
+image: registry.internal/mi-finding-smi-marks:latest
+```
+
+그 다음 서버에서 실행합니다.
+
+```bash
+faas-cli template store pull python3-flask-debian
+faas-cli build -f mi-finding-smi-marks.yml
+faas-cli push -f mi-finding-smi-marks.yml
+faas-cli deploy -f mi-finding-smi-marks.yml
+```
+
+`MINIO_ENDPOINT`는 사내 배포 설정에 추가하고, 두 MinIO Secret은 배포 전에
+생성되어 있어야 합니다.
+
+동기 호출 시간 제한은 가장 짧은 계층이 적용됩니다. 현재 함수 설정은
+`exec_timeout=5m`, 함수 read/write timeout은 `5m30s`입니다. Gateway/Provider와
+Scala 호출부는 이보다 길게 설정해야 하며, 기존 대화에서 권장한 관계는 다음과
+같습니다.
+
+```text
+함수 exec timeout       5분
+Gateway/Provider        5분 30초 이상
+Scala socket timeout    6분 이상
+```
+
+## 로컬 검증
 
 ```bash
 python -m venv .venv
-```
-
-Windows PowerShell:
-
-```powershell
-.venv\Scripts\Activate.ps1
-python -m pip install -e ".[test]"
-```
-
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
-python -m pip install -e ".[test]"
-```
-
-## CLI 실행
-
-```bash
-mi-finding sample/screen.png sample/templates \
-  --output annotated.png \
-  --json result.json
-```
-
-특정 파일명 prefix만 사용할 수도 있습니다.
-
-```bash
-mi-finding screen.png templates --prefix PRODUCT_STEP
-```
-
-종료 코드는 PASS면 `0`, FAIL이면 `1`입니다. JSON에는 점수, 중심 좌표, 매칭 방식, Full/Partial 단계와 모든 보조 지표가 포함됩니다.
-
-## Python 사용
-
-```python
-from mi_finding import TemplateFinder
-from mi_finding.io import load_templates, read_image
-
-image = read_image("screen.png")
-templates = load_templates("templates", prefix="PRODUCT_STEP")
-result = TemplateFinder().find(image, templates)
-
-print(result.to_dict())
-if result.success and result.candidate:
-    print(result.candidate.center)
-```
-
-임계값은 모두 바꿀 수 있습니다.
-
-```python
-from mi_finding import MatchingConfig, TemplateFinder
-
-finder = TemplateFinder(
-    MatchingConfig(
-        full_min_score=0.60,
-        full_direct_score=0.70,
-        partial_min_score=0.70,
-        variance_ratio_min=0.10,
-    )
-)
-```
-
-## JSON/FaaS 핸들러
-
-`mi_finding.handler.handle()`은 원래 요청 키를 지원합니다.
-
-```json
-{
-  "image": "BASE64_IMAGE",
-  "product": "PART_ID",
-  "layer": "STEP_SEQ",
-  "eqpid": "EQP_ID",
-  "mode": "normal"
-}
-```
-
-템플릿 루트는 인자로 전달하거나 `MI_TEMPLATE_ROOT` 환경변수로 지정합니다. 일반 모드에서는 `{product}_{layer}`로 시작하는 템플릿만 읽습니다. 대상 템플릿이 없을 때 전체 템플릿을 무조건 검색하던 기존 fallback은 오탐 위험 때문에 제거했습니다.
-
-```python
-from flask import make_response
-from mi_finding.handler import handle as find_handle
-
-def handle(req):
-    body, status = find_handle(req, template_root="MI/GA_TEMPLATE")
-    return make_response(body, status)
-```
-
-Popup 모드의 템플릿 파일명은 다음 prefix를 사용합니다.
-
-- `popup_on_target`
-- `popup_next_site`
-
-## 테스트
-
-```bash
+python -m pip install -r requirements.txt
 pytest
+ruff check .
+ruff format --check .
 ```
-
-테스트에는 핵심 임계값 분기와 partial edge offset 검증이 포함되어 있습니다.
-
-## GitHub에 올리기
-
-```bash
-git init
-git add .
-git commit -m "feat: add mi_finding template matcher"
-git branch -M main
-git remote add origin https://github.com/USERNAME/mi_finding.git
-git push -u origin main
-```
-
-GitHub에서 빈 저장소를 먼저 만든 뒤 `USERNAME`을 자신의 계정명으로 바꾸면 됩니다.
