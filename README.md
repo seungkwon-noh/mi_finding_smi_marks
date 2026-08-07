@@ -111,14 +111,14 @@ Popup은 `popup_on_target`, `popup_next_site` 각각에서 score가 `0.5`를 초
 
 ```text
 Full score >= 0.70
-  -> variance ratio, SSIM, histogram, NMI 조건을 통과한 후보만 PASS
+  -> variance ratio, histogram/SSIM, NMI >= 0.20 조건을 통과한 후보만 PASS
 
 0.60 <= Full score < 0.70
-  -> variance ratio, SSIM, histogram, NMI 조건 통과 시 PASS
+  -> 동일한 보조 지표 조건 통과 시 PASS
 
 Full 실패
   -> 원본 템플릿의 상/하/좌/우 0.70 edge로 재검색
-  -> 실패하면 0.35 edge로 재검색
+  -> 오탐 데이터가 누적된 0.35 edge는 비활성화
 
 Partial score >= 0.70 + partial 보조 조건 통과
   -> PASS
@@ -126,6 +126,10 @@ Partial score >= 0.70 + partial 보조 조건 통과
 그 외
   -> FAIL; 마지막 partial 최고점을 임의로 반환하지 않음
 ```
+
+원본 이미지의 CLAHE grayscale은 요청당 한 번만 계산해 모든 템플릿에서
+재사용합니다. 템플릿 및 Partial edge의 CLAHE는 서로 다른 이미지이므로 각각
+한 번씩 계산합니다.
 
 Partial에서 잘라낸 edge의 offset을 원본 템플릿 좌표로 복원하므로 반환 좌표는
 항상 원본 템플릿 전체의 중심입니다. Histogram correlation에는 `abs()`를
