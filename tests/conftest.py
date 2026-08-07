@@ -37,6 +37,7 @@ class FakeResponse:
 class FakeMinio:
     def __init__(self, images: dict[str, np.ndarray]) -> None:
         self.objects: dict[str, bytes] = {}
+        self.listed_prefixes: list[str] = []
         for name, image in images.items():
             ok, encoded = cv2.imencode(".png", image)
             assert ok
@@ -45,6 +46,7 @@ class FakeMinio:
     def list_objects(self, bucket: str, *, prefix: str, recursive: bool):
         assert bucket == "static"
         assert recursive is True
+        self.listed_prefixes.append(prefix)
         return [
             FakeObject(name) for name in sorted(self.objects) if name.startswith(prefix)
         ]
