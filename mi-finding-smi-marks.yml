@@ -18,9 +18,7 @@ functions:
       MINIO_BUCKET: static
       MINIO_TEMPLATE_PREFIX: MI/GA_TEMPLATE/
       MINIO_SECURE: "false"
-      MI_MAX_TEMPLATES: "100"
       MI_INCLUDE_DETAILS: "false"
     secrets:
       - mi-minio-access-key
       - mi-minio-secret-key
-
