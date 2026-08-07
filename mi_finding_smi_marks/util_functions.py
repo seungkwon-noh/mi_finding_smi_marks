@@ -563,15 +563,19 @@ def auxiliary_failures(
 def select_full_candidate(
     candidates: list[MatchCandidate], config: MatchingConfig
 ) -> tuple[MatchCandidate | None, str]:
-    direct = [item for item in candidates if item.score >= config.full_direct_score]
-    if direct:
-        return max(direct, key=lambda item: item.score), "full_direct"
-    assisted = [
+    # The recent handler flow builds ``best_candidates_per_template`` only from
+    # candidates that already passed the auxiliary metrics. Apply that gate before
+    # either score threshold so a high correlation score cannot bypass obviously
+    # incompatible variance/SSIM/histogram/NMI values.
+    valid = [
         item
         for item in candidates
-        if item.score >= config.full_min_score
-        and not auxiliary_failures(item, config, partial=False)
+        if not auxiliary_failures(item, config, partial=False)
     ]
+    direct = [item for item in valid if item.score >= config.full_direct_score]
+    if direct:
+        return max(direct, key=lambda item: item.score), "full_direct"
+    assisted = [item for item in valid if item.score >= config.full_min_score]
     if assisted:
         return max(assisted, key=lambda item: item.score), "full_assisted"
     return None, "full_rejected"
