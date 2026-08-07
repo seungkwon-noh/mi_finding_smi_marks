@@ -11,12 +11,14 @@ from mi_finding_smi_marks.util_functions import (
 )
 
 
-def candidate(score: float, *, good_metrics: bool) -> MatchCandidate:
+def candidate(
+    score: float, *, good_metrics: bool, nmi: float | None = None
+) -> MatchCandidate:
     metrics = MatchMetrics(
         ssim=0.8 if good_metrics else 0.1,
         variance_ratio=1.0 if good_metrics else 0.01,
         color_hist_similarity=0.8 if good_metrics else -0.5,
-        nmi=0.8 if good_metrics else 0.0,
+        nmi=nmi if nmi is not None else (0.8 if good_metrics else 0.0),
         bhattacharyya_distance=0.1 if good_metrics else 0.95,
         average_color_distance=10.0 if good_metrics else 200.0,
     )
@@ -48,6 +50,14 @@ def test_full_score_at_least_point_seven_with_valid_metrics_is_direct_pass() -> 
     )
     assert selected is not None
     assert reason == "full_direct"
+
+
+def test_full_direct_candidate_with_low_nmi_is_rejected() -> None:
+    selected, reason = select_full_candidate(
+        [candidate(0.71, good_metrics=True, nmi=0.191)], MatchingConfig()
+    )
+    assert selected is None
+    assert reason == "full_rejected"
 
 
 def test_invalid_high_score_does_not_hide_a_valid_assisted_candidate() -> None:
@@ -97,7 +107,7 @@ def test_bottom_partial_recovers_the_original_template_center() -> None:
     image = rng.integers(0, 256, (260, 300, 3), dtype=np.uint8)
     template = rng.integers(0, 256, (100, 80, 3), dtype=np.uint8)
     target = rng.integers(0, 256, template.shape, dtype=np.uint8)
-    bottom_height = round(template.shape[0] * 0.35)
+    bottom_height = round(template.shape[0] * 0.70)
     target[-bottom_height:, :] = template[-bottom_height:, :]
     x, y = 103, 81
     image[y : y + 100, x : x + 80] = target
@@ -105,13 +115,13 @@ def test_bottom_partial_recovers_the_original_template_center() -> None:
     result = _find_review(
         image,
         [TemplateAsset("MI/GA_TEMPLATE/P_01.png", template)],
-        MatchingConfig(),
+        MatchingConfig(full_min_score=0.99, full_direct_score=1.0),
     )
 
     assert result.success is True
     assert result.reason == "partial_pass"
     assert result.candidate is not None
-    assert result.candidate.ratio == 0.35
+    assert result.candidate.ratio == 0.70
     assert result.candidate.edge == "bottom"
     assert result.candidate.top_left == (x, y)
     assert result.candidate.center == (x + 40, y + 50)
