@@ -19,6 +19,9 @@ functions:
       MINIO_TEMPLATE_PREFIX: MI/GA_TEMPLATE/
       MINIO_SECURE: "false"
       MI_INCLUDE_DETAILS: "false"
+      MI_MATCH_EMAIL_GROUP: MI
+      MI_MATCH_EMAIL_PROJECT: find_smi
+      MI_MATCH_EMAIL_TIMEOUT: "20"
     secrets:
       - mi-minio-access-key
       - mi-minio-secret-key
