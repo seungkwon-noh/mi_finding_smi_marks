@@ -2,4 +2,5 @@ Flask>=3.0,<4
 minio>=7.2,<8
 numpy>=1.26,<3
 opencv-python-headless>=4.9,<5
+requests>=2.32,<3
 scikit-image>=0.23,<1
