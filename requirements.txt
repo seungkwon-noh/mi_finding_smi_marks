@@ -1,4 +1,4 @@
 -r mi_finding_smi_marks/requirements.txt
 pytest>=8,<9
 ruff>=0.16,<1
-
+waitress>=3,<4
