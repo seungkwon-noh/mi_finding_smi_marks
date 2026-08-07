@@ -18,7 +18,9 @@ class MatchingConfig:
     full_min_score: float = 0.60
     full_direct_score: float = 0.70
     partial_min_score: float = 0.70
-    partial_ratios: tuple[float, ...] = (0.70, 0.35)
+    # 0.35 produced convincing false positives because too little of the template
+    # remained. Re-enable it only after labelled TRUE samples justify new criteria.
+    partial_ratios: tuple[float, ...] = (0.70,)
     # Popup 대화에서 후보를 모으던 기준: max_val > 0.5
     popup_min_score: float = 0.50
 
@@ -350,6 +352,7 @@ def match_template_logic(
     ratio: float = 1.0,
     *,
     apply_clahe: bool = False,
+    image_gray_is_clahe: bool = False,
     config: MatchingConfig | None = None,
 ) -> tuple[
     tuple[int, int], np.ndarray, float, float, float, float, float, float, float
@@ -366,9 +369,10 @@ def match_template_logic(
     template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
     matching_gray = image_gray
     if apply_clahe:
-        matching_gray = apply_clahe_image(
-            image_gray, config.clahe_clip_limit, config.clahe_grid_size
-        )
+        if not image_gray_is_clahe:
+            matching_gray = apply_clahe_image(
+                image_gray, config.clahe_clip_limit, config.clahe_grid_size
+            )
         template_gray = apply_clahe_image(
             template_gray, config.clahe_clip_limit, config.clahe_grid_size
         )
@@ -543,9 +547,9 @@ def auxiliary_failures(
         and metrics.ssim < config.ssim_min
     ):
         failures.append("ssim_and_color_hist")
-    if metrics.ssim < config.ssim_min and metrics.nmi < config.nmi_min:
-        failures.append("ssim_and_nmi")
     if partial:
+        if metrics.ssim < config.ssim_min and metrics.nmi < config.nmi_min:
+            failures.append("ssim_and_nmi")
         if metrics.nmi < config.partial_nmi_floor:
             failures.append("partial_nmi_floor")
         if metrics.color_hist_similarity < config.partial_color_hist_floor:
@@ -557,6 +561,8 @@ def auxiliary_failures(
             and metrics.average_color_distance > config.partial_average_color_limit
         ):
             failures.append("partial_color_distance")
+    elif metrics.nmi < config.nmi_min:
+        failures.append("nmi")
     return failures
 
 
