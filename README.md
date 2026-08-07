@@ -111,7 +111,7 @@ Popup은 `popup_on_target`, `popup_next_site` 각각에서 score가 `0.5`를 초
 
 ```text
 Full score >= 0.70
-  -> 보조 지표와 무관하게 바로 PASS
+  -> variance ratio, SSIM, histogram, NMI 조건을 통과한 후보만 PASS
 
 0.60 <= Full score < 0.70
   -> variance ratio, SSIM, histogram, NMI 조건 통과 시 PASS
