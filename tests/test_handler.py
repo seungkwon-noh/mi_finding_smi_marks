@@ -82,6 +82,33 @@ def test_review_falls_back_to_all_images_when_product_layer_has_no_template() ->
     ]
 
 
+def test_review_fallback_excludes_popup_templates() -> None:
+    rng = np.random.default_rng(39)
+    image = rng.integers(0, 256, (180, 220, 3), dtype=np.uint8)
+    popup_template = rng.integers(0, 256, (50, 48, 3), dtype=np.uint8)
+    image[61:111, 93:141] = popup_template
+    minio = FakeMinio(
+        {"MI/GA_TEMPLATE/popup_on_target_false_positive.png": popup_template}
+    )
+
+    status, body = response_json(
+        {
+            "image": encode_image(image),
+            "product": "UNKNOWN",
+            "layer": "01",
+            "mode": "review",
+        },
+        minio,
+    )
+
+    assert status == 200
+    assert body == {"success": False, "message": "-1,-1"}
+    assert minio.listed_prefixes == [
+        "MI/GA_TEMPLATE/UNKNOWN_01",
+        "MI/GA_TEMPLATE/",
+    ]
+
+
 def test_review_does_not_load_all_images_when_specific_templates_exist() -> None:
     rng = np.random.default_rng(41)
     image = rng.integers(0, 256, (160, 190, 3), dtype=np.uint8)
