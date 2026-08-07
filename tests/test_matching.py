@@ -34,12 +34,30 @@ def candidate(score: float, *, good_metrics: bool) -> MatchCandidate:
     )
 
 
-def test_full_score_at_least_point_seven_is_direct_pass() -> None:
+def test_full_score_at_least_point_seven_still_needs_valid_metrics() -> None:
     selected, reason = select_full_candidate(
         [candidate(0.71, good_metrics=False)], MatchingConfig()
     )
+    assert selected is None
+    assert reason == "full_rejected"
+
+
+def test_full_score_at_least_point_seven_with_valid_metrics_is_direct_pass() -> None:
+    selected, reason = select_full_candidate(
+        [candidate(0.71, good_metrics=True)], MatchingConfig()
+    )
     assert selected is not None
     assert reason == "full_direct"
+
+
+def test_invalid_high_score_does_not_hide_a_valid_assisted_candidate() -> None:
+    selected, reason = select_full_candidate(
+        [candidate(0.85, good_metrics=False), candidate(0.64, good_metrics=True)],
+        MatchingConfig(),
+    )
+    assert selected is not None
+    assert selected.score == 0.64
+    assert reason == "full_assisted"
 
 
 def test_full_score_between_point_six_and_point_seven_needs_metrics() -> None:
@@ -50,6 +68,28 @@ def test_full_score_between_point_six_and_point_seven_needs_metrics() -> None:
     assert selected is not None
     assert selected.score == 0.64
     assert reason == "full_assisted"
+
+
+def test_review_rejects_high_scores_when_auxiliary_metrics_fail(monkeypatch) -> None:
+    bad_candidate = candidate(0.95, good_metrics=False)
+
+    def always_bad_candidate(**_kwargs):
+        return bad_candidate
+
+    monkeypatch.setattr("mi_finding_smi_marks.handler._candidate", always_bad_candidate)
+    result = _find_review(
+        np.ones((60, 60, 3), dtype=np.uint8),
+        [
+            TemplateAsset(
+                "MI/GA_TEMPLATE/P_01.png",
+                np.ones((20, 20, 3), dtype=np.uint8),
+            )
+        ],
+        MatchingConfig(),
+    )
+
+    assert result.success is False
+    assert result.reason == "no_candidate_passed_thresholds"
 
 
 def test_bottom_partial_recovers_the_original_template_center() -> None:
