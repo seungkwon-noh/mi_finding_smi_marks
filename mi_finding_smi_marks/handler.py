@@ -129,14 +129,16 @@ def _template_prefix() -> str:
     return prefix if prefix.endswith("/") else f"{prefix}/"
 
 
-def _load_templates(minio_client: Any, prefix: str) -> list[TemplateAsset]:
+def _load_templates(
+    minio_client: Any,
+    prefix: str,
+) -> list[TemplateAsset]:
     bucket = os.environ.get("MINIO_BUCKET", DEFAULT_BUCKET).strip() or DEFAULT_BUCKET
-    maximum = int(os.environ.get("MI_MAX_TEMPLATES", "100"))
     object_names = sorted(
         obj.object_name
         for obj in minio_client.list_objects(bucket, prefix=prefix, recursive=True)
         if getattr(obj, "object_name", "").lower().endswith(IMAGE_SUFFIXES)
-    )[:maximum]
+    )
 
     templates: list[TemplateAsset] = []
     for object_name in object_names:
@@ -152,6 +154,24 @@ def _load_templates(minio_client: Any, prefix: str) -> list[TemplateAsset]:
             continue
         templates.append(TemplateAsset(object_name, image))
     return templates
+
+
+def _load_templates_with_fallback(
+    minio_client: Any,
+    prefix: str,
+    base_prefix: str,
+) -> tuple[list[TemplateAsset], bool]:
+    """Load the requested template group, or every template when it is absent.
+
+    The fallback intentionally mirrors the original operating code from the shared
+    mi_finding conversation. It is based on an empty template lookup, not on a low
+    visual matching score.
+    """
+
+    assets = _load_templates(minio_client, prefix)
+    if assets:
+        return assets, False
+    return _load_templates(minio_client, base_prefix), True
 
 
 def _match_methods(image: np.ndarray) -> list[MatchMethod]:
@@ -271,7 +291,7 @@ def _find_popup_coordinate(
         if best is None or current[0] > best[0]:
             best = current
 
-    if best is None or best[0] < config.popup_min_score:
+    if best is None or best[0] <= config.popup_min_score:
         return FAIL_COORDINATE, best[0] if best else -1.0, best[4] if best else None
     score, top_left, width, height, template_name = best
     coordinate = f"{top_left[0] + width // 2},{top_left[1] + height // 2}"
@@ -303,11 +323,18 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
         base_prefix = _template_prefix()
 
         if mode == "popup":
+            popup_assets, used_fallback = _load_templates_with_fallback(
+                client,
+                f"{base_prefix}popup",
+                base_prefix,
+            )
             coordinates: list[str] = []
             popup_logs: list[dict[str, object]] = []
             for suffix in ("popup_on_target", "popup_next_site"):
                 prefix = f"{base_prefix}{suffix}"
-                assets = _load_templates(client, prefix)
+                assets = [
+                    asset for asset in popup_assets if asset.name.startswith(prefix)
+                ]
                 coordinate, score, template_name = _find_popup_coordinate(
                     image, assets, config
                 )
@@ -324,7 +351,13 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
             success = any(item != FAIL_COORDINATE for item in coordinates)
             logger.info(
                 json.dumps(
-                    {"eqpid": eqpid, "mode": mode, "popup": popup_logs},
+                    {
+                        "eqpid": eqpid,
+                        "mode": mode,
+                        "template_scope": "all" if used_fallback else "popup",
+                        "template_count": len(popup_assets),
+                        "popup": popup_logs,
+                    },
                     ensure_ascii=False,
                 )
             )
@@ -337,8 +370,13 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
 
         product = _required_text(data, "product")
         layer = _required_text(data, "layer")
+        recipe = str(data.get("recipe", ""))
         prefix = f"{base_prefix}{product}_{layer}"
-        assets = _load_templates(client, prefix)
+        assets, used_fallback = _load_templates_with_fallback(
+            client,
+            prefix,
+            base_prefix,
+        )
         prepared_image = process_image_with_detection(image)
         result = _find_review(prepared_image, assets, config)
         logger.info(
@@ -348,6 +386,9 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
                     "mode": mode,
                     "product": product,
                     "layer": layer,
+                    "recipe": recipe,
+                    "template_scope": "all" if used_fallback else "product_layer",
+                    "template_count": len(assets),
                     "result": result.to_dict(),
                 },
                 ensure_ascii=False,
