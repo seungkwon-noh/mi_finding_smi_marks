@@ -8,6 +8,7 @@ from typing import Literal
 
 import cv2
 import numpy as np
+from skimage.metrics import structural_similarity
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,8 @@ class MatchingConfig:
     full_direct_score: float = 0.70
     partial_min_score: float = 0.70
     partial_ratios: tuple[float, ...] = (0.70, 0.35)
-    popup_min_score: float = 0.70
+    # Popup 대화에서 후보를 모으던 기준: max_val > 0.5
+    popup_min_score: float = 0.50
 
     variance_ratio_min: float = 0.10
     variance_ratio_max: float = 7.0
@@ -216,54 +218,30 @@ def color_hist_score(first: np.ndarray, second: np.ndarray) -> float:
     return float(cv2.compareHist(first_hist, second_hist, cv2.HISTCMP_CORREL))
 
 
-def _single_channel_ssim(first: np.ndarray, second: np.ndarray) -> float:
-    first_float = first.astype(np.float64)
-    second_float = second.astype(np.float64)
-    minimum_dimension = min(first.shape[:2])
-    if minimum_dimension < 3:
-        mse = float(np.mean((first_float - second_float) ** 2))
-        return max(-1.0, 1.0 - mse / (255.0**2))
-
-    kernel = min(11, minimum_dimension)
-    if kernel % 2 == 0:
-        kernel -= 1
-    sigma = max(0.5, kernel / 7.333)
-    mu_first = cv2.GaussianBlur(first_float, (kernel, kernel), sigma)
-    mu_second = cv2.GaussianBlur(second_float, (kernel, kernel), sigma)
-    mu_first_sq = mu_first * mu_first
-    mu_second_sq = mu_second * mu_second
-    mu_cross = mu_first * mu_second
-    variance_first = (
-        cv2.GaussianBlur(first_float * first_float, (kernel, kernel), sigma)
-        - mu_first_sq
-    )
-    variance_second = (
-        cv2.GaussianBlur(second_float * second_float, (kernel, kernel), sigma)
-        - mu_second_sq
-    )
-    covariance = (
-        cv2.GaussianBlur(first_float * second_float, (kernel, kernel), sigma) - mu_cross
-    )
-    c1 = (0.01 * 255) ** 2
-    c2 = (0.03 * 255) ** 2
-    numerator = (2 * mu_cross + c1) * (2 * covariance + c2)
-    denominator = (mu_first_sq + mu_second_sq + c1) * (
-        variance_first + variance_second + c2
-    )
-    return float(np.mean(numerator / np.maximum(denominator, 1e-12)))
-
-
 def color_ssim(first: np.ndarray, second: np.ndarray) -> float:
     if first.shape != second.shape:
         raise ValueError("SSIM images must have the same shape")
-    if first.ndim == 2:
-        return _single_channel_ssim(first, second)
+    if first.ndim not in {2, 3}:
+        raise ValueError("SSIM images must be grayscale or color images")
+
+    minimum_dimension = min(first.shape[:2])
+    if minimum_dimension < 3:
+        first_float = first.astype(np.float64)
+        second_float = second.astype(np.float64)
+        mse = float(np.mean((first_float - second_float) ** 2))
+        return max(-1.0, 1.0 - mse / (255.0**2))
+
+    # scikit-image의 기본 win_size=7을 사용하되 작은 template도 처리한다.
+    win_size = min(7, minimum_dimension)
+    if win_size % 2 == 0:
+        win_size -= 1
     return float(
-        np.mean(
-            [
-                _single_channel_ssim(first[:, :, channel], second[:, :, channel])
-                for channel in range(3)
-            ]
+        structural_similarity(
+            first,
+            second,
+            channel_axis=-1 if first.ndim == 3 else None,
+            data_range=255,
+            win_size=win_size,
         )
     )
 
