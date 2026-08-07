@@ -55,6 +55,55 @@ def test_missing_product_template_is_a_business_failure() -> None:
     assert body == {"success": False, "message": "-1,-1"}
 
 
+def test_review_falls_back_to_all_images_when_product_layer_has_no_template() -> None:
+    rng = np.random.default_rng(37)
+    image = rng.integers(0, 256, (220, 260, 3), dtype=np.uint8)
+    template = rng.integers(0, 256, (60, 54, 3), dtype=np.uint8)
+    x, y = 103, 81
+    image[y : y + 60, x : x + 54] = template
+    minio = FakeMinio({"MI/GA_TEMPLATE/OTHER_99_button.png": template})
+
+    status, body = response_json(
+        {
+            "image": encode_image(image),
+            "product": "UNKNOWN",
+            "layer": "01",
+            "recipe": "RCP01",
+            "mode": "review",
+        },
+        minio,
+    )
+
+    assert status == 200
+    assert body == {"success": True, "message": f"{x + 27},{y + 30}"}
+    assert minio.listed_prefixes == [
+        "MI/GA_TEMPLATE/UNKNOWN_01",
+        "MI/GA_TEMPLATE/",
+    ]
+
+
+def test_review_does_not_load_all_images_when_specific_templates_exist() -> None:
+    rng = np.random.default_rng(41)
+    image = rng.integers(0, 256, (160, 190, 3), dtype=np.uint8)
+    template = rng.integers(0, 256, (40, 44, 3), dtype=np.uint8)
+    image[55:95, 71:115] = template
+    minio = FakeMinio({"MI/GA_TEMPLATE/PART_01_button.png": template})
+
+    status, body = response_json(
+        {
+            "image": encode_image(image),
+            "product": "PART",
+            "layer": "01",
+            "mode": "review",
+        },
+        minio,
+    )
+
+    assert status == 200
+    assert body["success"] is True
+    assert minio.listed_prefixes == ["MI/GA_TEMPLATE/PART_01"]
+
+
 def test_popup_keeps_the_successful_button_in_its_original_position() -> None:
     rng = np.random.default_rng(29)
     image = rng.integers(0, 256, (180, 220, 3), dtype=np.uint8)
@@ -73,6 +122,7 @@ def test_popup_keeps_the_successful_button_in_its_original_position() -> None:
         "success": True,
         "message": f"(-1,-1), ({x + 25},{y + 20})",
     }
+    assert minio.listed_prefixes == ["MI/GA_TEMPLATE/popup"]
 
 
 def test_invalid_request_returns_http_400() -> None:
