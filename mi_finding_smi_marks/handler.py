@@ -134,12 +134,18 @@ def _template_prefix() -> str:
 def _load_templates(
     minio_client: Any,
     prefix: str,
+    *,
+    excluded_names: tuple[str, ...] = (),
 ) -> list[TemplateAsset]:
     bucket = os.environ.get("MINIO_BUCKET", DEFAULT_BUCKET).strip() or DEFAULT_BUCKET
+    excluded_names = tuple(name.lower() for name in excluded_names if name)
     object_names = sorted(
         obj.object_name
         for obj in minio_client.list_objects(bucket, prefix=prefix, recursive=True)
         if getattr(obj, "object_name", "").lower().endswith(IMAGE_SUFFIXES)
+        and not any(
+            name in getattr(obj, "object_name", "").lower() for name in excluded_names
+        )
     )
 
     templates: list[TemplateAsset] = []
@@ -162,6 +168,8 @@ def _load_templates_with_fallback(
     minio_client: Any,
     prefix: str,
     base_prefix: str,
+    *,
+    excluded_names: tuple[str, ...] = (),
 ) -> tuple[list[TemplateAsset], bool]:
     """Load the requested template group, or every template when it is absent.
 
@@ -170,10 +178,21 @@ def _load_templates_with_fallback(
     visual matching score.
     """
 
-    assets = _load_templates(minio_client, prefix)
+    assets = _load_templates(
+        minio_client,
+        prefix,
+        excluded_names=excluded_names,
+    )
     if assets:
         return assets, False
-    return _load_templates(minio_client, base_prefix), True
+    return (
+        _load_templates(
+            minio_client,
+            base_prefix,
+            excluded_names=excluded_names,
+        ),
+        True,
+    )
 
 
 def _match_methods(image: np.ndarray) -> list[MatchMethod]:
@@ -386,6 +405,7 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
             client,
             prefix,
             base_prefix,
+            excluded_names=("popup",),
         )
         prepared_image = process_image_with_detection(image)
         result = _find_review(prepared_image, assets, config)
