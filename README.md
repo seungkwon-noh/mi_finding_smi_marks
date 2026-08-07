@@ -136,6 +136,31 @@ Partial에서 잘라낸 edge의 offset을 원본 템플릿 좌표로 복원하�
 항상 원본 템플릿 전체의 중심입니다. Histogram correlation에는 `abs()`를
 사용하지 않습니다. 음의 상관도를 높은 유사도로 오인하지 않기 위해서입니다.
 
+## 매칭 분석 메일
+
+Review 결과에 진단 후보가 있으면 전체 이미지의 bounding box, 추출 ROI, 원본
+템플릿과 판정 지표를 하나의 PNG로 만들어 메일 API에 전송할 수 있습니다. 성공
+후보뿐 아니라 임계값 또는 보조 지표에서 탈락한 실패 후보도 분석 대상으로
+전송합니다.
+
+메일은 진단 기능일 뿐 판정 기준이 아닙니다. 최종 응답은 항상
+`FindingResult.success`를 따르므로, 예를 들어 진단 후보 score가 높아도
+`success=false`이면 호출자에게는 그대로 아래 응답을 반환합니다.
+
+```json
+{"success": false, "message": "-1,-1"}
+```
+
+메일 API 오류나 timeout도 FaaS 응답에는 영향을 주지 않고 로그에만 남습니다.
+사내 URL과 수신자는 공개 저장소에 넣지 않고 배포 환경에서 주입합니다. URL과
+수신자가 모두 설정된 경우에만 기능이 활성화됩니다.
+
+- `MI_MATCH_EMAIL_URL`: 메일 API URL
+- `MI_MATCH_EMAIL_RECIPIENTS`: 쉼표로 구분한 수신자 주소
+- `MI_MATCH_EMAIL_GROUP`: 기본 `MI`
+- `MI_MATCH_EMAIL_PROJECT`: 기본 `find_smi`
+- `MI_MATCH_EMAIL_TIMEOUT`: 초 단위 timeout, 기본 `20`
+
 ## MinIO 설정
 
 접속 주소와 인증정보는 코드에 넣지 않습니다.
