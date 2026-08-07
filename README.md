@@ -26,6 +26,7 @@ Scala 호출 프로그램
 
 ```text
 mi-finding-smi-marks.yml       OpenFaaS build/deploy 설정
+http_test.py                   로컬 HTTP 실행기(기본 포트 7184)
 mi_finding_smi_marks/
   __init__.py
   handler.py                   FaaS 진입점, MinIO 조회, Review/Popup 분기
@@ -48,6 +49,7 @@ Review 호출은 `mode`에 `review` 또는 일반 문자열을 사용합니다.
   "image": "BASE64_PNG_OR_JPEG",
   "product": "PART_ID",
   "layer": "STEP_SEQ",
+  "recipe": "RECIPE_ID",
   "eqpid": "EQP_ID",
   "mode": "review"
 }
@@ -90,13 +92,22 @@ Popup 호출은 다음처럼 보냅니다.
 템플릿은 MinIO의 기본 bucket/prefix 아래에서 읽습니다.
 
 ```text
-static/MI/GA_TEMPLATE/{product}_{layer}...
+static/MI/GA_TEMPLATE/{product}...
 static/MI/GA_TEMPLATE/popup_on_target...
 static/MI/GA_TEMPLATE/popup_next_site...
 ```
 
-대상 제품·layer 템플릿이 없을 때 전체 템플릿을 검색하지 않습니다. 이
-fallback은 다른 제품의 유사한 UI가 선택되는 오탐을 만들 수 있기 때문입니다.
+Review는 먼저 `{product}_{layer}` prefix로 object를 조회합니다. 해당 prefix에
+이미지가 하나도 없으면 기존 운영 코드처럼 `MI/GA_TEMPLATE/` 아래의 모든
+이미지를 다시 가져와 매칭을 계속합니다. 특정 템플릿이 존재하지만 시각 매칭
+점수만 낮은 경우에는 전체 이미지 fallback을 실행하지 않습니다.
+
+Popup도 먼저 `popup` prefix를 조회하고, 이미지가 없을 때 같은 전체 이미지
+fallback을 적용한 뒤 `popup_on_target`, `popup_next_site` 이름으로 나눠
+판정합니다.
+
+Popup은 `popup_on_target`, `popup_next_site` 각각에서 score가 `0.5`를 초과한
+후보 중 최고 점수를 사용합니다.
 
 ```text
 Full score >= 0.70
@@ -173,6 +184,16 @@ Scala socket timeout    6분 이상
 ```
 
 ## 로컬 검증
+
+공유 대화의 로컬 HTTP 구성과 같은 방식으로 실행하려면 다음 명령을 사용합니다.
+
+```bash
+python http_test.py
+```
+
+기본 주소는 `http://0.0.0.0:7184`이며 `HOST`, `PORT` 환경변수로 변경할 수
+있습니다. OpenFaaS 배포에서는 이 파일이 아니라 언어 템플릿의 `index.py`가
+`handler.handle(req)`를 호출합니다.
 
 ```bash
 python -m venv .venv
