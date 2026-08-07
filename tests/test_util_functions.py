@@ -3,10 +3,15 @@ from __future__ import annotations
 import numpy as np
 
 from mi_finding_smi_marks.util_functions import (
+    MatchingConfig,
     color_ssim,
     generate_edge_templates,
     match_template_logic,
 )
+
+
+def test_popup_candidate_threshold_matches_recent_handler_code() -> None:
+    assert MatchingConfig().popup_min_score == 0.50
 
 
 def test_small_ssim_does_not_require_a_seven_pixel_window() -> None:
