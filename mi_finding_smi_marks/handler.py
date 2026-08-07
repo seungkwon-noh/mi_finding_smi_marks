@@ -17,6 +17,7 @@ from .util_functions import (
     FindingResult,
     MatchCandidate,
     MatchingConfig,
+    apply_clahe_image,
     candidate_from_match,
     decode_base64_image,
     full_template,
@@ -52,6 +53,7 @@ class MatchMethod:
     image: np.ndarray
     gray: np.ndarray
     apply_clahe: bool = False
+    image_gray_is_clahe: bool = False
 
 
 def _payload(req: str | bytes | Mapping[str, Any]) -> dict[str, Any]:
@@ -176,10 +178,17 @@ def _load_templates_with_fallback(
 
 def _match_methods(image: np.ndarray) -> list[MatchMethod]:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray_clahe = apply_clahe_image(gray)
     without_marker = remove_green_mark(image)
     return [
         MatchMethod("RAW", image, gray),
-        MatchMethod("CLAHE_ONLY", image, gray, apply_clahe=True),
+        MatchMethod(
+            "CLAHE_ONLY",
+            image,
+            gray_clahe,
+            apply_clahe=True,
+            image_gray_is_clahe=True,
+        ),
         MatchMethod(
             "REMOVE_MARKER_ONLY",
             without_marker,
@@ -202,6 +211,7 @@ def _candidate(
         edge.image,
         edge.ratio,
         apply_clahe=method.apply_clahe,
+        image_gray_is_clahe=method.image_gray_is_clahe,
         config=config,
     )
     return candidate_from_match(
