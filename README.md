@@ -99,8 +99,9 @@ static/MI/GA_TEMPLATE/popup_next_site...
 
 Review는 먼저 `{product}_{layer}` prefix로 object를 조회합니다. 해당 prefix에
 이미지가 하나도 없으면 기존 운영 코드처럼 `MI/GA_TEMPLATE/` 아래의 모든
-이미지를 다시 가져와 매칭을 계속합니다. 특정 템플릿이 존재하지만 시각 매칭
-점수만 낮은 경우에는 전체 이미지 fallback을 실행하지 않습니다.
+Review 이미지를 다시 가져와 매칭을 계속합니다. 이때 object name에 `popup`이
+포함된 템플릿은 대소문자와 관계없이 제외합니다. 특정 템플릿이 존재하지만 시각
+매칭 점수만 낮은 경우에는 전체 이미지 fallback을 실행하지 않습니다.
 
 Popup도 먼저 `popup` prefix를 조회하고, 이미지가 없을 때 같은 전체 이미지
 fallback을 적용한 뒤 `popup_on_target`, `popup_next_site` 이름으로 나눠
