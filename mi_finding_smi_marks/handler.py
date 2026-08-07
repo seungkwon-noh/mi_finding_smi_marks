@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -10,6 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+import requests
 from flask import make_response
 
 from .riselog import getMyLogger
@@ -36,6 +38,7 @@ FAIL_COORDINATE = "-1,-1"
 DEFAULT_BUCKET = "static"
 DEFAULT_TEMPLATE_PREFIX = "MI/GA_TEMPLATE/"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+EMAIL_CONTENT_TYPE = "application/json; charset=utf-8"
 
 _MINIO_CLIENT: Any | None = None
 _MINIO_LOCK = threading.Lock()
@@ -339,6 +342,147 @@ def _response_body(result: FindingResult) -> dict[str, object]:
     return body
 
 
+def _email_recipients() -> list[str]:
+    return [
+        address.strip()
+        for address in os.environ.get("MI_MATCH_EMAIL_RECIPIENTS", "").split(",")
+        if address.strip()
+    ]
+
+
+def _report_panel(image: np.ndarray | None, title: str) -> np.ndarray:
+    panel_width, panel_height = 360, 300
+    panel = np.full((panel_height + 38, panel_width, 3), 245, dtype=np.uint8)
+    cv2.putText(
+        panel,
+        title,
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (30, 30, 30),
+        1,
+        cv2.LINE_AA,
+    )
+    if image is None or image.size == 0:
+        return panel
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    height, width = image.shape[:2]
+    scale = min(panel_width / width, panel_height / height)
+    resized = cv2.resize(
+        image,
+        (max(1, round(width * scale)), max(1, round(height * scale))),
+        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+    )
+    y = 38 + (panel_height - resized.shape[0]) // 2
+    x = (panel_width - resized.shape[1]) // 2
+    panel[y : y + resized.shape[0], x : x + resized.shape[1]] = resized
+    return panel
+
+
+def _build_match_report_image(
+    image: np.ndarray,
+    assets: list[TemplateAsset],
+    result: FindingResult,
+    name: str,
+) -> bytes | None:
+    candidate = result.candidate
+    if candidate is None:
+        return None
+
+    x, y = candidate.top_left
+    width, height = candidate.width, candidate.height
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(image.shape[1], x + width), min(image.shape[0], y + height)
+    roi = image[y1:y2, x1:x2]
+    boxed = image.copy()
+    cv2.rectangle(boxed, (x1, y1), (x2, y2), (0, 255, 0), 3)
+    template = next(
+        (asset.image for asset in assets if asset.name == candidate.template_name),
+        None,
+    )
+
+    panels = cv2.hconcat(
+        [
+            _report_panel(boxed, "Final Match (Box)"),
+            _report_panel(roi, "Extracted ROI"),
+            _report_panel(template, f"Template ({candidate.edge})"),
+        ]
+    )
+    metrics = candidate.metrics
+    status_color = (20, 20, 20) if result.success else (0, 140, 255)
+    header = np.full((112, panels.shape[1], 3), 255, dtype=np.uint8)
+    lines = (
+        f"{name} | Success:{result.success} | Reason:{result.reason}",
+        f"Method:{candidate.method} Stage:{candidate.stage} "
+        f"Ratio:{candidate.ratio:.2f} Edge:{candidate.edge}",
+        f"Score:{candidate.score:.3f} VarRatio:{metrics.variance_ratio:.3f} "
+        f"SSIM:{metrics.ssim:.3f} Hist:{metrics.color_hist_similarity:.4f} "
+        f"NMI:{metrics.nmi:.4f} BD:{metrics.bhattacharyya_distance:.4f} "
+        f"AD:{metrics.average_color_distance:.2f}",
+    )
+    for index, line in enumerate(lines):
+        cv2.putText(
+            header,
+            line,
+            (12, 28 + index * 34),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            status_color,
+            2 if index == 0 else 1,
+            cv2.LINE_AA,
+        )
+    ok, encoded = cv2.imencode(".png", cv2.vconcat([header, panels]))
+    return encoded.tobytes() if ok else None
+
+
+def _send_match_email(
+    image: np.ndarray,
+    assets: list[TemplateAsset],
+    result: FindingResult,
+    eqpid: str,
+    product: str,
+    layer: str,
+) -> None:
+    """Send a diagnostic candidate without changing the business response."""
+
+    url = os.environ.get("MI_MATCH_EMAIL_URL", "").strip()
+    recipients = _email_recipients()
+    if not url or not recipients:
+        return
+    if result.candidate is None:
+        logger.warning("email_skip candidate=None")
+        return
+
+    name = f"{eqpid}_{product}_{layer}"
+    try:
+        image_bytes = _build_match_report_image(image, assets, result, name)
+        if not image_bytes:
+            logger.error("email_report_encode_failed")
+            return
+        payload = {
+            "Group": os.environ.get("MI_MATCH_EMAIL_GROUP", "MI").strip() or "MI",
+            "Project": os.environ.get("MI_MATCH_EMAIL_PROJECT", "find_smi").strip()
+            or "find_smi",
+            "JsonString": json.dumps(
+                {
+                    "img_info": name,
+                    "image": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            ),
+            "Recipient": recipients,
+        }
+        response = requests.post(
+            url=url,
+            headers={"Content-Type": EMAIL_CONTENT_TYPE},
+            data=json.dumps(payload),
+            timeout=float(os.environ.get("MI_MATCH_EMAIL_TIMEOUT", "20")),
+        )
+        logger.info(f"email status={response.status_code}")
+    except Exception as exc:
+        logger.error(f"email_send_failed error={exc}")
+
+
 def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None):
     """OpenFaaS entry point called by ``/home/app/index.py`` for each POST."""
 
@@ -424,6 +568,7 @@ def handle(req: str | bytes | Mapping[str, Any], minio_client: Any | None = None
                 ensure_ascii=False,
             )
         )
+        _send_match_email(prepared_image, assets, result, eqpid, product, layer)
         return make_response(_response_body(result), 200)
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
